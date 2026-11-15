@@ -1,0 +1,674 @@
+PROJECT IMPLEMENTATION PLAN
+
+Project Name
+
+Academic Portal - Supabase Authentication, Spring Boot Authorization,
+and Role-Based Access Control
+
+Document Purpose
+
+This document describes the functionality, architecture, technology
+stack, database design, API contracts, frontend pages, security
+responsibilities, and planned implementation sequence for the Academic
+Portal project.
+
+The project is intended as a practical learning application for
+understanding:
+
+-   Authentication (AuthN): identifying who a user is.
+-   Authorization (AuthZ): deciding what an authenticated user is
+    allowed to do.
+-   Role-Based Access Control (RBAC): granting access according to a
+    user’s role.
+-   JWT-based security between a React frontend and a Spring Boot REST
+    API.
+-   Integration of Supabase Auth with a separately developed Spring Boot
+    backend.
+
+The application will have two roles: STUDENT and TEACHER. Students can
+submit and view their own academic record. Teachers can view and manage
+student records.
+
+1. PROJECT OVERVIEW
+
+The Academic Portal will be a web application with a React (Vite)
+frontend, Supabase Auth for identity and login, Supabase PostgreSQL for
+application data, and a Spring Boot backend for business logic and API
+security.
+
+Supabase will act as the Identity Provider. It will manage user
+registration, login, sessions, and JWT access-token issuance. Spring
+Boot will act as an OAuth2 Resource Server. It will validate incoming
+Supabase JWTs and enforce role-based access rules on protected REST
+endpoints.
+
+The frontend will provide separate experiences for students and
+teachers. The backend, rather than the frontend alone, will be
+responsible for protecting data and enforcing permissions.
+
+2. PROJECT GOALS
+
+The project will demonstrate how to:
+
+1.  Register and authenticate users with Supabase Auth.
+
+2.  Associate each authenticated user with a role: STUDENT or TEACHER.
+
+3.  Issue and use Supabase JWT access tokens when calling a Spring Boot
+    API.
+
+4.  Validate JWTs in Spring Security.
+
+5.  Convert role information into Spring Security authorities such as
+    ROLE_STUDENT and ROLE_TEACHER.
+
+6.  Protect API endpoints according to the authenticated user’s role.
+
+7.  Identify the current user using the JWT subject (sub), which
+    contains the user’s UUID.
+
+8.  Restrict students to their own academic records.
+
+9.  Allow teachers to view and manage student records.
+
+10. Understand the difference between frontend route protection and
+    backend authorization.
+
+11. USER ROLES AND PERMISSIONS
+
+3.1 STUDENT A student will be able to:
+
+-   Create an account with the STUDENT role.
+-   Log in through the Student login option.
+-   Access only the Student Dashboard.
+-   Submit their academic details and marks once.
+-   View their own submitted academic record.
+-   View their record in read-only form after submission.
+-   Log out.
+
+A student must not be able to view, create, edit, or delete another
+student’s record.
+
+3.2 TEACHER A teacher will be able to:
+
+-   Create an account with the TEACHER role, as represented in the
+    initial project flow.
+-   Log in through the Teacher login option.
+-   Access only the Teacher Dashboard.
+-   View all student records.
+-   Add a student record manually.
+-   Edit an existing student record.
+-   Delete a student record.
+-   Log out.
+
+Teacher-only operations must be protected by Spring Security on the
+backend.
+
+3.3 Role Validation The sign-up form will let a user select Student or
+Teacher. The selected role will be included in Supabase user metadata
+during registration. The project design also includes a public.profiles
+table that mirrors the Supabase Auth user and stores the user’s role.
+
+At login, the frontend will compare the role selected on the login page
+with the account’s actual role. If they do not match, the frontend will
+sign the user out and display an access-denied error.
+
+IMPORTANT SECURITY DESIGN NOTE: A role selector in a public sign-up form
+must not, by itself, be treated as a secure way to grant teacher
+privileges. The final implementation must establish a trusted process
+for assigning or approving the TEACHER role. The backend must use a
+trusted role source and must never rely only on a role value that an
+untrusted client can freely change. The exact teacher-provisioning
+method is a project decision to settle before production use.
+
+4. SYSTEM ARCHITECTURE
+
+4.1 Main Components
+
+Frontend: - React.js - Vite - React Router - Supabase JavaScript SDK
+(@supabase/supabase-js) - Axios
+
+Authentication and Database: - Supabase Auth - Supabase PostgreSQL -
+public.profiles table - public.student_records table - PostgreSQL
+trigger to create a profile row when a Supabase Auth user is created
+
+Backend: - Java - Spring Boot - Spring Web - Spring Data JPA - Spring
+Security - OAuth2 Resource Server support - PostgreSQL Driver - Lombok
+
+API Testing: - Postman
+
+Development tools mentioned in the project discussion: - VS Code for
+frontend development - IntelliJ IDEA for Spring Boot development -
+Supabase Dashboard for project and database configuration
+
+4.2 Authentication and API Request Flow
+
+1.  A user opens the React application and chooses Sign Up.
+2.  The user enters an email address, password, and role (Student or
+    Teacher).
+3.  React calls Supabase Auth signUp and sends the selected role as user
+    metadata.
+4.  Supabase creates the authentication user in auth.users.
+5.  A PostgreSQL trigger creates the corresponding row in
+    public.profiles.
+6.  The user logs in through the React application using Supabase Auth.
+7.  Supabase returns a session containing a signed JWT access token.
+8.  React obtains the active access token and attaches it to backend
+    requests using: Authorization: Bearer
+9.  Spring Security validates the token using the configured Supabase
+    JWT verification mechanism (JWKS endpoint or the appropriate
+    Supabase signing configuration).
+10. Spring Boot obtains the authenticated user’s UUID from the JWT sub
+    claim and the user’s trusted role information.
+11. Spring Security converts the role into an authority such as
+    ROLE_STUDENT or ROLE_TEACHER.
+12. The backend checks the role before allowing access to protected
+    endpoints.
+13. For student-specific operations, the backend uses the authenticated
+    user’s UUID to scope database access to that student’s record.
+
+The frontend may redirect users to the appropriate dashboard, but
+backend authorization remains the actual security boundary. Calling an
+API directly through Postman must not bypass permissions.
+
+5. DATABASE DESIGN
+
+The database will use Supabase PostgreSQL. Two application tables are
+planned in the public schema.
+
+5.1 public.profiles
+
+Purpose: Stores application profile information associated with a
+Supabase Auth user. It mirrors the identity record from auth.users and
+stores the user’s application role.
+
+Planned columns:
+
+-   id: UUID, primary key, foreign key referencing auth.users.id.
+-   email: VARCHAR.
+-   role: VARCHAR, intended values STUDENT or TEACHER.
+-   created_at: timestamp.
+
+Relationship: Each profile belongs to one Supabase Auth user. A
+PostgreSQL trigger will automatically insert a profile row when a new
+user is created in auth.users.
+
+The profiles table is intended to hold the application’s role
+information. The implementation must ensure that users cannot assign
+themselves elevated privileges by modifying client-controlled metadata
+or profile data.
+
+5.2 public.student_records
+
+Purpose: Stores the academic details and marks submitted by students and
+managed by teachers.
+
+Planned columns:
+
+-   id: BIGSERIAL, primary key.
+-   student_id: UUID, unique, foreign key referencing profiles.id.
+-   full_name: VARCHAR.
+-   roll_number: VARCHAR.
+-   department: VARCHAR.
+-   marks: JSONB or separate subject columns.
+-   updated_at: timestamp.
+
+The initial frontend/API example uses separate marks fields for: -
+Math - Science - English
+
+A unique constraint on student_id will enforce one academic record per
+student.
+
+5.3 Database Relationships and Behaviour
+
+-   auth.users is the identity source managed by Supabase Auth.
+-   profiles.id references auth.users.id.
+-   student_records.student_id references profiles.id.
+-   A newly registered user receives a profile row through a database
+    trigger.
+-   A student can have at most one student_records row.
+-   The authenticated user’s UUID is used to associate a student’s
+    record with that user.
+
+The exact choice between a JSONB marks column and individual subject
+columns will be finalized when the database schema and JPA entities are
+implemented.
+
+6. BACKEND FUNCTIONAL REQUIREMENTS
+
+The Spring Boot backend will expose REST APIs and enforce authentication
+and authorization.
+
+6.1 Authentication and Security
+
+-   Configure Spring Security as an OAuth2 Resource Server.
+-   Validate Supabase JWT access tokens.
+-   Configure the relevant Supabase JWKS endpoint or signing-key
+    verification mechanism.
+-   Extract the user’s UUID from the JWT sub claim.
+-   Obtain the user’s trusted application role.
+-   Convert the role to Spring Security authorities: STUDENT ->
+    ROLE_STUDENT TEACHER -> ROLE_TEACHER
+-   Return 401 Unauthorized for requests without a valid authentication
+    token.
+-   Return 403 Forbidden when an authenticated user lacks the required
+    permission.
+-   Protect endpoints even when requests are sent directly through
+    Postman or another API client.
+
+6.2 Student Data Isolation
+
+-   A student record lookup must use the authenticated JWT subject.
+-   The client must not be allowed to choose another student’s UUID to
+    access that student’s data.
+-   A student may create only the record associated with their own
+    authenticated UUID.
+-   A student may not submit a second record if one already exists.
+-   Students receive read-only access to their submitted record.
+-   If a student has not submitted a record, the API will return 404 Not
+    Found so the frontend can display the submission form.
+
+6.3 Teacher Record Management
+
+-   Teachers can retrieve all student records.
+-   Teachers can create records for students.
+-   Teachers can update records by record ID.
+-   Teachers can delete records by record ID.
+-   These operations must require the TEACHER role.
+
+7. BACKEND REST API PLAN
+
+The following endpoints are planned.
+
+GET /api/me Allowed role: STUDENT, TEACHER Purpose: Returns information
+about the currently authenticated user, including the user’s profile and
+role, based on the verified authentication context.
+
+GET /api/student/record Allowed role: STUDENT Purpose: Returns the
+authenticated student’s academic record. The backend obtains student_id
+from the verified JWT subject. If no record exists, it returns 404 Not
+Found.
+
+POST /api/student/record Allowed role: STUDENT Purpose: Creates the
+authenticated student’s academic record. The backend associates the
+record with the JWT subject and rejects a second submission if a record
+already exists.
+
+GET /api/teacher/records Allowed role: TEACHER Purpose: Returns all
+student records for display in the teacher administration dashboard.
+
+POST /api/teacher/records Allowed role: TEACHER Purpose: Allows a
+teacher to add a student record manually.
+
+PUT /api/teacher/records/{id} Allowed role: TEACHER Purpose: Updates the
+student record identified by the record ID.
+
+DELETE /api/teacher/records/{id} Allowed role: TEACHER Purpose: Deletes
+the student record identified by the record ID.
+
+8. FRONTEND FUNCTIONAL REQUIREMENTS
+
+The frontend will be a React application created with Vite.
+
+8.1 Planned Dependencies
+
+-   @supabase/supabase-js: Supabase authentication and session
+    management.
+-   react-router-dom: Client-side routing and protected pages.
+-   axios: HTTP requests to the Spring Boot backend.
+
+8.2 Environment Configuration
+
+The frontend will use environment variables:
+
+VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY VITE_API_BASE_URL
+
+Example local API base URL: http://localhost:8080/api
+
+The .env file must be excluded from Git using .gitignore. Real secrets
+and private credentials must not be committed to the repository.
+
+8.3 Supabase Client Service
+
+File: src/services/supabaseClient.js
+
+Responsibilities: - Read the Supabase URL and anon key from environment
+variables. - Initialize the Supabase client using createClient. - Export
+the configured client for use throughout the frontend.
+
+8.4 Axios API Service
+
+File: src/services/api.js
+
+Responsibilities: - Create a reusable Axios instance with the backend
+base URL. - Before each request, retrieve the current Supabase
+session. - Attach the access token to the Authorization header as a
+Bearer token. - Keep backend API calls consistent across pages and
+components.
+
+8.5 Authentication Context
+
+File: src/context/AuthContext.jsx
+
+Responsibilities: - Store the current Supabase session. - Expose the
+current user and role. - Track the authentication loading state. - Load
+the initial session when the application starts. - Listen for Supabase
+authentication state changes, including login, logout, and token
+refresh. - Provide a signUp method that registers a user with the
+selected role metadata. - Provide a signInWithRole method that validates
+the selected login role against the account role. - Sign out a user when
+the selected login role does not match the account role. - Provide a
+signOut method. - Expose authentication information and methods through
+a React context/provider.
+
+8.6 Protected Route Component
+
+File: src/components/ProtectedRoute.jsx
+
+Responsibilities: - Redirect unauthenticated users to /login. - Check
+whether the authenticated user’s role is allowed to access the requested
+route. - Redirect a user with the wrong role to their appropriate
+dashboard. - Prevent accidental cross-navigation between student and
+teacher pages.
+
+This component improves frontend navigation and user experience. It does
+not replace backend security checks.
+
+9. FRONTEND PAGES AND USER EXPERIENCE
+
+The application will contain five main pages.
+
+9.1 Home / Landing Page Route: /
+
+Purpose: Introduces the Academic Portal and provides navigation to Login
+and Sign Up.
+
+Expected behaviour: - Show the project name and a short description. -
+If the user is logged out, show Login and Sign Up navigation. - If the
+user is logged in, show a link to the dashboard matching their role.
+
+Suggested page heading: Academic Portal - Supabase Auth & RBAC
+
+Suggested description: Role-based Student Marks Submission & Teacher
+Administration System.
+
+9.2 Sign-Up Page Route: /signup
+
+Purpose: Allows a new user to create an account.
+
+Fields: - Email - Password - Role selector: Student or Teacher
+
+Expected behaviour: - Validate required fields. - Call Supabase Auth
+signUp. - Include the selected role in user metadata as described in the
+project flow. - Display registration errors when sign-up fails. - On
+successful account creation, show a confirmation message and navigate to
+Login.
+
+9.3 Login Page Route: /login
+
+Purpose: Authenticates an existing user and sends them to the correct
+dashboard.
+
+Fields and controls: - Student Login / Teacher Login role tabs. -
+Email. - Password. - Login button.
+
+Expected behaviour: - The user selects the intended portal (Student or
+Teacher). - React calls Supabase signInWithPassword. - React checks the
+account’s actual role against the selected login role. - If the roles
+match, navigate to the corresponding dashboard. - If the roles do not
+match, sign the user out and display an access-denied message. - Display
+authentication errors clearly.
+
+Example mismatch message: Access denied: This account is not registered
+as a Teacher.
+
+9.4 Student Dashboard Route: /student/dashboard Access: Authenticated
+STUDENT users only.
+
+Purpose: Allows a student to submit their academic information and view
+their own submitted record.
+
+When the dashboard loads: - Call GET /api/student/record. - While the
+request is running, show a loading state. - If the API returns 404, show
+the academic submission form. - If the API returns a record, show the
+student’s record card.
+
+Submission form fields: - Full Name - Roll Number - Department - Math
+Marks - Science Marks - English Marks
+
+Expected behaviour: - A student submits their details and marks through
+POST /api/student/record. - The backend associates the record with the
+authenticated user’s UUID. - After successful submission, show the
+returned record. - The student can view the record but cannot edit or
+delete it through the student dashboard. - Include the logged-in user’s
+email and a Logout action.
+
+9.5 Teacher Dashboard Route: /teacher/dashboard Access: Authenticated
+TEACHER users only.
+
+Purpose: Provides an administration interface for managing student
+academic records.
+
+Expected behaviour: - Call GET /api/teacher/records when the dashboard
+loads. - Display all records in a table. - Provide a form to add a new
+student record. - Allow an existing record to be loaded into the form
+for editing. - Submit new records through POST /api/teacher/records. -
+Submit updates through PUT /api/teacher/records/{id}. - Delete records
+through DELETE /api/teacher/records/{id}, after confirmation. - Refresh
+the displayed records after successful add, edit, or delete
+operations. - Include the logged-in teacher’s email, role, and Logout
+action.
+
+Planned table columns: - Name - Roll Number - Department - Math -
+Science - English - Actions (Edit and Delete)
+
+The add/edit form will use: - Full Name - Roll Number - Department -
+Math Marks - Science Marks - English Marks
+
+10. APPLICATION ROUTES
+
+/ Public landing page /signup Public sign-up page /login Public login
+page /student/dashboard Protected; STUDENT role required
+/teacher/dashboard Protected; TEACHER role required
+
+The routes will be configured using BrowserRouter, Routes, and Route
+from React Router. The student and teacher dashboard routes will be
+wrapped with the ProtectedRoute component and the AuthProvider will
+provide authentication state to the application.
+
+11. ERROR HANDLING AND ACCESS CONTROL
+
+The application should handle the following situations:
+
+-   Invalid email or password during login.
+-   Supabase sign-up or login failure.
+-   Login attempt using the wrong role tab.
+-   Unauthenticated request to a protected backend endpoint.
+-   Authenticated request with insufficient role permissions.
+-   Student requests a record that does not exist.
+-   Student attempts to submit a duplicate record.
+-   Student attempts to access another student’s data.
+-   Teacher dashboard fails to load records.
+-   Add, edit, or delete operation fails.
+-   Network or backend connectivity errors.
+
+Expected HTTP status behaviour: - 401 Unauthorized: missing, invalid, or
+expired authentication token. - 403 Forbidden: authenticated user does
+not have the required role/permission. - 404 Not Found: requested
+student record does not exist. - Appropriate 4xx responses for invalid
+input or duplicate submission. - 5xx responses for unexpected
+server-side failures.
+
+Error messages shown to users should be understandable and should not
+expose secrets or internal implementation details.
+
+12. SECURITY REQUIREMENTS
+
+-   Supabase Auth manages user identity and issues signed access tokens.
+-   Spring Security validates tokens before protected API logic runs.
+-   Backend role checks are mandatory; frontend route guards are not
+    sufficient.
+-   Student record queries must be scoped using the authenticated user’s
+    UUID.
+-   A client-supplied student ID must not be trusted for student
+    self-service operations.
+-   Teacher privileges must be assigned through a trusted process.
+-   Database relationships and constraints must preserve user-to-profile
+    and profile-to-record associations.
+-   Environment files containing credentials must be excluded from Git.
+-   Only appropriate public Supabase client configuration should be
+    exposed to the frontend.
+-   Supabase service-role keys, database passwords, JWT signing secrets,
+    and other private credentials must never be placed in frontend code
+    or committed to the repository.
+-   Test role boundaries by calling the APIs directly, including with
+    Postman.
+
+13. IMPLEMENTATION ROADMAP
+
+PHASE 1 - Project and Supabase Setup - Create a new Supabase project. -
+Obtain the project URL and anon public key. - Configure the React
+environment variables. - Configure email authentication for local
+development. - The initial discussion suggests disabling email
+confirmation for faster local testing. - Create the profiles and
+student_records tables. - Add the profile-creation trigger. - Define the
+trusted role assignment approach before relying on teacher privileges.
+
+PHASE 2 - React Frontend Foundation - Create a new Vite React
+application. - Install Supabase JS, React Router, and Axios. - Configure
+the Supabase client. - Configure the Axios API instance and Bearer token
+interceptor. - Implement AuthContext. - Implement ProtectedRoute. -
+Create the Home, Sign Up, and Login pages. - Connect all frontend
+routes.
+
+PHASE 3 - React Dashboards - Implement the Student Dashboard. - Add the
+student academic details and marks form. - Implement loading,
+empty-record, success, and error states. - Implement the read-only
+student record view. - Implement the Teacher Dashboard. - Add the
+teacher record table and add/edit/delete interactions. - Verify frontend
+navigation for both roles.
+
+PHASE 4 - Spring Boot Backend Foundation - Generate a new Spring Boot
+application. - Add Spring Web, Spring Data JPA, PostgreSQL Driver,
+OAuth2 Resource Server, and Lombok dependencies as required. - Configure
+the Supabase PostgreSQL connection. - Configure JWT verification. -
+Configure SecurityFilterChain. - Implement role-to-authority
+conversion. - Implement the authenticated-user identity handling.
+
+PHASE 5 - Database Entities and REST APIs - Create JPA entities for
+profiles and student_records. - Create repositories and service-layer
+logic. - Implement GET /api/me. - Implement the student record GET and
+POST endpoints. - Implement teacher record GET, POST, PUT, and DELETE
+endpoints. - Enforce role checks and student-specific data scoping. -
+Handle missing records and duplicate submissions.
+
+PHASE 6 - Integration and Testing - Connect the React frontend to the
+Spring Boot API. - Verify that Axios sends the Supabase access token. -
+Test valid and invalid tokens. - Test Student and Teacher login flows. -
+Test access to each role-protected endpoint. - Test that a student
+cannot retrieve or modify another student’s record. - Test teacher add,
+edit, and delete operations. - Use Postman with real Supabase access
+tokens to verify backend enforcement independently of the frontend.
+
+14. ACCEPTANCE CHECKLIST
+
+Supabase and database: [ ] A Supabase project has been created. [ ]
+Email authentication is configured for local testing. [ ] The profiles
+table exists. [ ] The student_records table exists. [ ] The
+profile-creation trigger works. [ ] Each profile is linked to
+auth.users. [ ] Each student record is linked to one profile. [ ] A
+trusted teacher-role assignment process is defined.
+
+Frontend: [ ] The Vite React application starts successfully. [ ]
+Supabase client configuration works. [ ] Sign-up works. [ ] Login works.
+[ ] Student/Teacher role mismatch is rejected by the frontend. [ ]
+Authentication state survives page navigation and is refreshed
+correctly. [ ] Axios attaches the access token to API requests. [ ]
+Unauthenticated users are redirected to Login. [ ] Students cannot
+navigate into the Teacher Dashboard. [ ] Teachers cannot navigate into
+the Student Dashboard. [ ] Students can submit one academic record. [ ]
+Students can view their own record. [ ] Teachers can view all records. [
+] Teachers can add, edit, and delete records. [ ] Logout works.
+
+Backend: [ ] Spring Boot validates Supabase JWTs. [ ] JWT subject is
+used to identify the authenticated user. [ ] Roles are converted into
+Spring Security authorities. [ ] /api/me is accessible to both
+authenticated roles. [ ] Student endpoints require STUDENT. [ ] Teacher
+endpoints require TEACHER. [ ] Student data access is scoped to the
+authenticated user. [ ] Duplicate student submissions are rejected. [ ]
+Unauthorized requests return appropriate status codes. [ ] Direct API
+calls cannot bypass role restrictions.
+
+Integration: [ ] React and Spring Boot communicate successfully. [ ]
+Valid Supabase tokens are accepted. [ ] Invalid or missing tokens are
+rejected. [ ] Role restrictions are verified through Postman. [ ]
+Student data isolation is verified through direct API tests.
+
+15. OUT OF SCOPE / NOT YET SPECIFIED
+
+The conversation does not define the following as current implementation
+requirements:
+
+-   A mobile application.
+-   Parent or administrator roles.
+-   Attendance management.
+-   Course or subject management beyond the example marks fields.
+-   Fee management.
+-   Timetables or class scheduling.
+-   Email or push notifications.
+-   Deployment platform or production hosting configuration.
+-   A detailed visual design system or branding specification.
+-   A finalized teacher invitation/approval workflow.
+-   A finalized choice between JSONB marks and separate subject columns.
+
+These items should not be assumed to be part of the initial build unless
+they are agreed upon later.
+
+16. IMPORTANT IMPLEMENTATION PRINCIPLES
+
+1.  Supabase Auth is responsible for authentication and token issuance.
+
+2.  Spring Boot is responsible for securing business APIs and enforcing
+    authorization.
+
+3.  React is responsible for the user interface, session-aware
+    navigation, and sending access tokens.
+
+4.  The backend must independently validate every protected request.
+
+5.  The JWT subject identifies the authenticated user for student data
+    ownership.
+
+6.  Role-based access must be checked at the backend, not only in React.
+
+7.  Student data must remain isolated between users.
+
+8.  Credentials and private keys must not be committed to GitHub.
+
+9.  The project should be built and tested incrementally, validating
+    each phase before moving on.
+
+10. EXPECTED FINAL RESULT
+
+The completed project will be a working Academic Portal with two
+role-specific user experiences.
+
+A Student will be able to register, log in, submit academic details and
+marks once, and view their own record.
+
+A Teacher will be able to register or be provisioned with the TEACHER
+role through the agreed trusted process, log in, view all student
+records, add new records, edit existing records, and delete records.
+
+Supabase Auth will handle identity and JWT issuance. The React frontend
+will manage the user experience and pass access tokens to the Spring
+Boot backend. Spring Security will validate those tokens and enforce
+role-based access control. Supabase PostgreSQL will store profile and
+academic record data.
+
+The main learning outcome will be a practical understanding of
+authentication, JWT validation, authorization, role-based access
+control, protected routes, and user-specific data access in a React +
+Spring Boot application integrated with Supabase.
+
+END OF PROJECT IMPLEMENTATION PLAN
